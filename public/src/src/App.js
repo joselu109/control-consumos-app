@@ -4,20 +4,21 @@ import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken }
 import { getFirestore, collection, addDoc, onSnapshot, query } from 'firebase/firestore';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-// --- Helper: OBTENER CONFIGURACIÓN Y VARIABLES DE ENTORNO ---
-// Este código ahora es compatible con el despliegue en Vercel y el entorno de Canvas.
+// --- Helper: OBTENER CONFIGURACIÓN Y VARIABLES DE ENTORNO (VERSIÓN CORREGIDA) ---
+// Este código es más robusto para el despliegue y no detendrá la construcción en Vercel.
 const getFirebaseConfig = () => {
-    // 1. Intenta obtener la configuración desde las variables de entorno de Vercel/Netlify.
-    const configFromEnv = process.env.REACT_APP_FIREBASE_CONFIG;
-    if (configFromEnv) {
+    // 1. Intenta obtener la configuración desde las variables de entorno (si existen).
+    const configFromEnv = typeof process !== 'undefined' && process.env ? process.env.REACT_APP_FIREBASE_CONFIG : undefined;
+    if (configFromEnv && configFromEnv.length > 2) { // Comprueba que no sea una cadena vacía o "{}""
         try {
-            // Asegurarse de que no es una cadena vacía o nula antes de parsear
             return JSON.parse(configFromEnv);
         } catch (e) {
-            console.error("Error al parsear REACT_APP_FIREBASE_CONFIG:", e);
+            console.error("Error al parsear REACT_APP_FIREBASE_CONFIG. Por favor, revisa el formato en Vercel.", e);
+            // Devuelve un objeto vacío para que la app cargue y muestre el error en la consola del navegador.
             return {};
         }
     }
+    
     // 2. Si no, intenta obtener la configuración del entorno de Canvas.
     if (typeof __firebase_config !== 'undefined' && __firebase_config) {
         try {
@@ -27,14 +28,15 @@ const getFirebaseConfig = () => {
             return {};
         }
     }
-    // 3. Si ninguna está disponible, muestra un error y devuelve un objeto vacío.
-    console.error("Configuración de Firebase no encontrada. La aplicación no podrá conectar con la base de datos.");
+
+    // 3. Si ninguna está disponible, devuelve un objeto vacío. La app se cargará pero fallará la conexión a la BD.
+    // Esto evita que el proceso de 'build' en Vercel falle.
     return {};
 };
 
 const firebaseConfig = getFirebaseConfig();
 // El appId también puede ser configurable para separar datos de desarrollo y producción.
-const appId = process.env.REACT_APP_ID || (typeof __app_id !== 'undefined' ? __app_id : 'default-consumo-app');
+const appId = (typeof process !== 'undefined' && process.env ? process.env.REACT_APP_ID : undefined) || (typeof __app_id !== 'undefined' ? __app_id : 'default-consumo-app');
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
 
@@ -92,40 +94,46 @@ function useFirebaseAuth() {
     const [db, setDb] = useState(null);
     const [user, setUser] = useState(null);
     const [isAuthReady, setIsAuthReady] = useState(false);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         if (Object.keys(firebaseConfig).length === 0) {
-            console.error("La configuración de Firebase está vacía. La aplicación no funcionará correctamente.");
+            setError("La configuración de Firebase no se ha cargado. Revisa las variables de entorno en Vercel.");
             return;
         }
         
-        const app = initializeApp(firebaseConfig);
-        const authInstance = getAuth(app);
-        const dbInstance = getFirestore(app);
+        try {
+            const app = initializeApp(firebaseConfig);
+            const authInstance = getAuth(app);
+            const dbInstance = getFirestore(app);
 
-        setAuth(authInstance);
-        setDb(dbInstance);
+            setAuth(authInstance);
+            setDb(dbInstance);
 
-        const unsubscribe = onAuthStateChanged(authInstance, async (currentUser) => {
-            if (currentUser) {
-                setUser(currentUser);
-            } else if (initialAuthToken) {
-                try {
-                    await signInWithCustomToken(authInstance, initialAuthToken);
-                } catch (error) {
-                    console.error("Error signing in with custom token:", error);
+            const unsubscribe = onAuthStateChanged(authInstance, async (currentUser) => {
+                if (currentUser) {
+                    setUser(currentUser);
+                } else if (initialAuthToken) {
+                    try {
+                        await signInWithCustomToken(authInstance, initialAuthToken);
+                    } catch (error) {
+                        console.error("Error signing in with custom token:", error);
+                        await signInAnonymously(authInstance);
+                    }
+                } else {
                     await signInAnonymously(authInstance);
                 }
-            } else {
-                await signInAnonymously(authInstance);
-            }
-            setIsAuthReady(true);
-        });
+                setIsAuthReady(true);
+            });
 
-        return () => unsubscribe();
+            return () => unsubscribe();
+        } catch (e) {
+            console.error("Error al inicializar Firebase:", e);
+            setError("Error al inicializar Firebase. ¿Las credenciales son correctas?");
+        }
     }, []);
 
-    return { auth, db, user, isAuthReady };
+    return { auth, db, user, isAuthReady, error };
 }
 
 
@@ -246,6 +254,11 @@ function WomackControl({ db, data, onBack }) {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!db) {
+            setMessage('Error: No se ha podido conectar con la base de datos.');
+            setTimeout(() => setMessage(''), 3000);
+            return;
+        }
         if (!date || !line || !water || !oilTotal || !oilPartial) {
             setMessage('Error: Todos los campos son obligatorios.');
             setTimeout(() => setMessage(''), 3000);
@@ -386,6 +399,11 @@ function BodymakerControl({ db, data, onBack }) {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!db) {
+            setMessage('Error: No se ha podido conectar con la base de datos.');
+            setTimeout(() => setMessage(''), 3000);
+            return;
+        }
         const readings = Object.entries(consumptions)
             .map(([machineId, consumption]) => ({
                 machineId: Number(machineId),
@@ -504,7 +522,7 @@ function BodymakerControl({ db, data, onBack }) {
 
 // Componente principal que renderiza toda la aplicación
 export default function App() {
-    const { db, user, isAuthReady } = useFirebaseAuth();
+    const { db, user, isAuthReady, error } = useFirebaseAuth();
     const [view, setView] = useState('dashboard');
     const [womackData, setWomackData] = useState([]);
     const [bodymakerData, setBodymakerData] = useState([]);
@@ -512,7 +530,10 @@ export default function App() {
 
     // Efecto para cargar los datos de Womack desde Firestore en tiempo real
     useEffect(() => {
-        if (!isAuthReady || !db) return;
+        if (!isAuthReady || !db) {
+            if(isAuthReady) setLoading(false);
+            return;
+        };
 
         const womackCollection = collection(db, `artifacts/${appId}/public/data/womackEntries`);
         const q = query(womackCollection);
@@ -521,8 +542,8 @@ export default function App() {
             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setWomackData(data);
             setLoading(false);
-        }, (error) => {
-            console.error("Error fetching Womack data:", error);
+        }, (err) => {
+            console.error("Error fetching Womack data:", err);
             setLoading(false);
         });
 
@@ -539,16 +560,28 @@ export default function App() {
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodymakerData(data);
-        }, (error) => {
-            console.error("Error fetching Bodymaker data:", error);
+        }, (err) => {
+            console.error("Error fetching Bodymaker data:", err);
         });
 
         return () => unsubscribe();
     }, [isAuthReady, db]);
+    
+    if (error) {
+        return (
+            <div className="min-h-screen bg-gray-900 text-white font-sans p-4 sm:p-6 lg:p-8 flex justify-center items-center">
+                <div className="bg-red-900/50 border border-red-500 rounded-xl p-8 text-center">
+                    <h2 className="text-2xl font-bold mb-4">Error de Configuración</h2>
+                    <p>{error}</p>
+                    <p className="mt-4 text-sm text-gray-400">Asegúrate de haber configurado correctamente la variable de entorno `REACT_APP_FIREBASE_CONFIG` en Vercel.</p>
+                </div>
+            </div>
+        )
+    }
 
     const renderView = () => {
-        if (loading || !isAuthReady) {
-            return <div className="flex justify-center items-center h-screen"><div className="text-center text-white text-xl">Cargando datos...</div></div>
+        if (loading) {
+            return <div className="flex justify-center items-center h-64"><div className="text-center text-white text-xl">Cargando datos...</div></div>
         }
         
         switch (view) {
