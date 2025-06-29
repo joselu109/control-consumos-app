@@ -5,9 +5,36 @@ import { getFirestore, collection, addDoc, onSnapshot, query } from 'firebase/fi
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 // --- Helper: OBTENER CONFIGURACIÓN Y VARIABLES DE ENTORNO ---
-// Estas variables son proporcionadas por el entorno de ejecución
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-consumo-app';
+// Este código ahora es compatible con el despliegue en Vercel y el entorno de Canvas.
+const getFirebaseConfig = () => {
+    // 1. Intenta obtener la configuración desde las variables de entorno de Vercel/Netlify.
+    const configFromEnv = process.env.REACT_APP_FIREBASE_CONFIG;
+    if (configFromEnv) {
+        try {
+            // Asegurarse de que no es una cadena vacía o nula antes de parsear
+            return JSON.parse(configFromEnv);
+        } catch (e) {
+            console.error("Error al parsear REACT_APP_FIREBASE_CONFIG:", e);
+            return {};
+        }
+    }
+    // 2. Si no, intenta obtener la configuración del entorno de Canvas.
+    if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+        try {
+            return JSON.parse(__firebase_config);
+        } catch (e) {
+            console.error("Error al parsear __firebase_config:", e);
+            return {};
+        }
+    }
+    // 3. Si ninguna está disponible, muestra un error y devuelve un objeto vacío.
+    console.error("Configuración de Firebase no encontrada. La aplicación no podrá conectar con la base de datos.");
+    return {};
+};
+
+const firebaseConfig = getFirebaseConfig();
+// El appId también puede ser configurable para separar datos de desarrollo y producción.
+const appId = process.env.REACT_APP_ID || (typeof __app_id !== 'undefined' ? __app_id : 'default-consumo-app');
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
 
@@ -68,7 +95,7 @@ function useFirebaseAuth() {
 
     useEffect(() => {
         if (Object.keys(firebaseConfig).length === 0) {
-            console.error("Firebase config is missing!");
+            console.error("La configuración de Firebase está vacía. La aplicación no funcionará correctamente.");
             return;
         }
         
@@ -111,7 +138,7 @@ function Dashboard({ womackData, bodymakerData, onNavigate }) {
         const sortedData = [...womackData].sort((a, b) => new Date(a.date) - new Date(b.date));
         
         sortedData.forEach(d => {
-            const dateKey = new Date(d.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+            const dateKey = new Date(d.date+'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short', timeZone: 'UTC' });
             if (!aggregatedData[dateKey]) {
                 aggregatedData[dateKey] = { name: dateKey, 'Agua L1': 0, 'Agua L2': 0, 'Aceite L1': 0, 'Aceite L2': 0 };
             }
